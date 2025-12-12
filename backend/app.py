@@ -179,13 +179,8 @@ def google_search_snippets(query: str, num_results: int = 5, timestamp_iso: Opti
     if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
         raise RuntimeError("Google search keys not set in environment")
 
-    # append date to query if available
-    if timestamp_iso:
-        try:
-            date_part = timestamp_iso.split("T", 1)[0]
-            query = f"{query} {date_part}"
-        except Exception:
-            pass
+    # Note: Date is already added by the AI model during query generation
+    # No need to append it again here to avoid duplicates
 
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
@@ -199,6 +194,21 @@ def google_search_snippets(query: str, num_results: int = 5, timestamp_iso: Opti
     resp = requests.get(url, params=params, timeout=10)
     resp.raise_for_status()
     data = resp.json()
+    
+    # Debug logging
+    print(f"🔍 Google Search Debug:")
+    print(f"   Query sent: {query}")
+    print(f"   Total results available: {data.get('searchInformation', {}).get('totalResults', 'unknown')}")
+    print(f"   Items returned: {len(data.get('items', []))}")
+    
+    # Check for errors or warnings in response
+    if 'error' in data:
+        print(f"   ⚠️ API Error: {data['error']}")
+    if len(data.get('items', [])) == 0:
+        print(f"   ⚠️ No results found. This could be due to:")
+        print(f"      - API quota exceeded")
+        print(f"      - CSE configuration (check if it's set to 'Search the entire web')")
+        print(f"      - Query too specific")
 
     results = []
     for item in data.get("items", [])[:num_results]:
@@ -278,6 +288,16 @@ def enrich_search_results_with_extraction(snippets: List[Dict[str, str]]) -> Lis
             "snippet": item.get("snippet"),
             "extracted_text": extracted
         })
+
+    
+    
+    print(f"\n📊 Enriched Results Summary:")
+    for i, result in enumerate(enriched, 1):
+        print(f"  Result {i}:")
+        print(f"    Title: {result['title'][:60]}...")
+        print(f"    Snippet length: {len(result.get('snippet', ''))} chars")
+        print(f"    Extracted length: {len(result.get('extracted_text', ''))} chars")
+    
     return enriched
 
 
@@ -326,12 +346,21 @@ def build_refinement_messages(conversation: Conversation, user_message: str, *, 
         search_text = "Web Search Results:\n"
         for i, r in enumerate(search_results[:3], 1):  # Limit to top 3 for speed
             search_text += f"\n{i}. {r.get('title', 'N/A')}\n"
-            search_text += f"   {r.get('snippet', '')[:200]}\n"
-        messages.append({"role": "assistant", "content": search_text})
+            search_text += f"   Snippet: {r.get('snippet', '')[:1000]}\n"
+            
+            # Append extracted_text if available
+            extracted_text = r.get('extracted_text', '')
+            if extracted_text:
+                search_text += f"   Extracted Content: {extracted_text[:2000]}\n"
+        
+        messages.append({"role": "system", "content": search_text})
+        
+        # Print the combined search_text with both snippet and extracted_text
+        print("✅ Combined search text results (snippet + extracted_text):")
+        print(search_text)
 
     # Simple instruction for response
     messages.append({"role": "user", "content": "Answer the question based on the information provided."})
-
     return messages
 
 
@@ -383,26 +412,26 @@ async def chat(input: UserInput):
     # Perform web search only if explicitly requested by user
     search_results = None
     if input.use_web_search:
-        print(f"🔍 Web search triggered for query: {input.message}")
+        print(f" Web search triggered for query: {input.message}")
         try:
             timestamp = get_iso_timestamp()
             
             # Generate optimized search query
             search_query = generate_search_query_via_groq(conversation, input.message, timestamp)
-            print(f"📝 Generated search query: {search_query}")
+            print(f" Generated search query: {search_query}")
             
             # Perform Google Custom Search
-            print(f"🌐 Calling Google Custom Search API...")
+            print(f" Calling Google Custom Search API...")
             snippets = google_search_snippets(search_query, num_results=5, timestamp_iso=timestamp)
-            print(f"✅ Got {len(snippets)} search results")
+            print(f"Got {len(snippets)} search results")
             
             # Enrich with page extraction
-            print(f"📄 Extracting page content...")
+            print(f" Extracting page content...")
             search_results = enrich_search_results_with_extraction(snippets)
-            print(f"✅ Web search completed successfully")
+            print(f" Web search completed successfully")
         except Exception as e:
             # Continue without search if it fails
-            print(f"❌ Web search failed: {type(e).__name__}: {str(e)}")
+            print(f" Web search failed: {type(e).__name__}: {str(e)}")
             import traceback
             traceback.print_exc()
             search_results = None
